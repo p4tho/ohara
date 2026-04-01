@@ -1,0 +1,4 @@
+pymupdf4llm
+pypdf
+pyttsx3
+yaspin

@@ -1,0 +1,5 @@
+# Ohara
+Ohara is an all-in-one .pdf to .m4b converter, .pdf reader, and .m4b player. Its goal is to make research papers more accessible for people with little time. Whether you're always on the go or can't sit still for a long paper, you can still be educated. It is named after an island in One Piece that was known for its Tree of Knowledge and scholarly citizens. I believe everyone deserves an education, and that an intellectual society is necessary for a better world.
+
+# Why?
+From newspapers to TV, conversations to podcasts, books to .epubs, etc., the way we receive information has become more convenient in the past few decades. Research papers are behind on the trend. Both private and public research are the backbone of innovation, and they should be easier to digest for everybody. The problem is that it's very time-consuming to sit and read dozens of pages of a research paper. Imagine being able to multitask while learning about the latest breakthroughs in a sector, that's where Ohara comes in.

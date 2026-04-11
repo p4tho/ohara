@@ -1,0 +1,8 @@
+[package]
+name = "robin"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lopdf = "0.40.0"
+thiserror = "2.0.18"

@@ -658,6 +658,7 @@ name = "robin"
 version = "0.1.0"
 dependencies = [
  "lopdf",
+ "thiserror",
 ]
 
 [[package]]

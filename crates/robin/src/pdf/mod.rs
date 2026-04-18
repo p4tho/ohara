@@ -2,7 +2,7 @@ mod helpers;
 mod types;
 
 use crate::{ RobinError };
-use helpers::{ obj_to_f32 };
+use helpers::{ is_numeric, most_common_y_spacing, normalize_text, obj_to_f32, round_two_decimal };
 use lopdf::{ Document, Object };
 use std::collections::{ BTreeMap };
 use types::{ PDFBookmark, TextSpan };
@@ -10,15 +10,22 @@ use types::{ PDFBookmark, TextSpan };
 #[derive(Debug)]
 pub struct PDFDocument {
     pub bookmarks: BTreeMap<usize, Vec<PDFBookmark>>, // index determines position on page with multiple bookmarks
+    pub text: BTreeMap<usize, String>,
     pub text_spans: BTreeMap<usize, Vec<TextSpan>>
 }
 
 impl PDFDocument {
     /// Uses lopdf's Document struct to extract necessary data for .m4b conversion
     pub fn new(
-        doc: &Document
+        doc: &Document,
+        spacing_margin: f32 // how much percent of abnormal y-spacing necessary for new line (0.2 is good)
     ) -> Result<Self, RobinError> {
+        if spacing_margin < 0.0 || spacing_margin > 1.0 {
+            return Err(RobinError::InvalidMargin);
+        }
+        
         let bookmarks = Self::extract_pdf_bookmarks(doc)?;
+        let mut text = BTreeMap::new();
         let mut text_spans = BTreeMap::new();
         
         // Extract text spans for each page
@@ -27,10 +34,51 @@ impl PDFDocument {
             text_spans.insert(page_num as usize, page_text_spans);
         }
         
+        // Check if text spans are empty
+        if text_spans.values().all(|v| v.is_empty()) {
+            return Err(RobinError::TextSpansNotFound);
+        }
+
+        // Extract text from text spans
+        for (page_num, page_text_spans) in &text_spans {
+            let page_text = Self::extract_pdf_text_from_text_spans(page_text_spans, spacing_margin);
+            text.insert(*page_num, normalize_text(&page_text));
+        }
+        
         Ok(Self {
             bookmarks,
+            text,
             text_spans
         })
+    }
+    
+    fn extract_pdf_text_from_text_spans(
+        spans: &[TextSpan],
+        spacing_margin: f32
+    ) -> String {
+        let mut page_text = String::new();
+        let y_min = most_common_y_spacing(&spans) * (1.0 - spacing_margin);
+        let y_max = most_common_y_spacing(&spans) * (1.0 + spacing_margin);
+        let mut prev_y: f32 = f32::MAX;
+        
+        for span in spans {
+            let y_diff = round_two_decimal(prev_y - span.y).abs();
+            
+            // Skip page numbers
+            if is_numeric(&span.text) {
+                continue;
+            // Start new line if y spacing is more than usual
+            } else if (y_diff < y_min || y_diff > y_max) && y_diff != 0.0 {
+                page_text.push_str("\n");
+            }
+            
+            page_text.push_str(span.get_text());
+            page_text.push_str(" ");
+
+            prev_y = span.y;
+        }
+        
+        page_text
     }
     
     fn extract_pdf_bookmarks(
@@ -78,8 +126,6 @@ impl PDFDocument {
         let mut font_name: String = String::new();
         let mut font_size: f32 = 12.0;
         // Text matrix position offsets
-        let mut tx: f32 = 0.0;
-        let mut ty: f32 = 0.0;
         let mut leading: f32 = 0.0;
     
         for op in &content.operations {
@@ -103,23 +149,26 @@ impl PDFDocument {
                     if let (Some(e), Some(f)) = (op.operands.get(4), op.operands.get(5)) {
                         x = obj_to_f32(e);
                         y = obj_to_f32(f);
-                        tx = 0.0;
-                        ty = 0.0;
                     }
                 }
                 // Move text position: Td tx ty
-                "Td" | "TD" => {
+                "Td" => {
                     if let (Some(dx), Some(dy)) = (op.operands.get(0), op.operands.get(1)) {
-                        tx += obj_to_f32(dx);
-                        ty += obj_to_f32(dy);
-                        if op.operator == "TD" {
-                            leading = -obj_to_f32(op.operands.get(1).unwrap());
-                        }
+                        x += obj_to_f32(dx);
+                        y += obj_to_f32(dy);
+                    }
+                }
+                "TD" => {
+                    if let (Some(dx), Some(dy)) = (op.operands.get(0), op.operands.get(1)) {
+                        let dy = obj_to_f32(dy);
+                        x += obj_to_f32(dx);
+                        y += dy;
+                        leading = -dy;
                     }
                 }
                 // Move to next line using leading: T*
                 "T*" => {
-                    ty -= leading;
+                    y -= leading;
                 }
                 // Show string: Tj
                 "Tj" => {
@@ -127,8 +176,8 @@ impl PDFDocument {
                         let text = String::from_utf8_lossy(bytes).to_string();
                         spans.push(TextSpan {
                             text,
-                            x: x + tx,
-                            y: y + ty,
+                            x: x,
+                            y: y,
                             font_name: font_name.clone(),
                             font_size,
                             page: page_num,
@@ -162,8 +211,8 @@ impl PDFDocument {
                         if !text.is_empty() {
                             spans.push(TextSpan {
                                 text,
-                                x: x + tx,
-                                y: y + ty,
+                                x: x,
+                                y: y,
                                 font_name: font_name.clone(),
                                 font_size,
                                 page: page_num,
@@ -173,13 +222,13 @@ impl PDFDocument {
                 }
                 // Move to next line and show string
                 "'" => {
-                    ty -= leading;
+                    y -= leading;
                     if let Some(Object::String(bytes, _)) = op.operands.get(0) {
                         let text = String::from_utf8_lossy(bytes).to_string();
                         spans.push(TextSpan {
                             text,
-                            x: x + tx,
-                            y: y + ty,
+                            x: x,
+                            y: y,
                             font_name: font_name.clone(),
                             font_size,
                             page: page_num,

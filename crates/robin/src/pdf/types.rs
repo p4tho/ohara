@@ -13,3 +13,9 @@ pub struct TextSpan {
     pub font_size: f32,
     pub page: u32,
 }
+
+impl TextSpan {
+    pub fn get_text(&self) -> &str {
+        &self.text
+    }
+}

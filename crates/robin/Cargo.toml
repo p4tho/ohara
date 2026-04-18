@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 lopdf = { workspace = true }
+regex = { workspace = true }
 thiserror = { workspace = true }

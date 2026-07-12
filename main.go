@@ -10,12 +10,16 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
+	"time"
 
+	"github.com/PuerkitoBio/goquery"
 	flag "github.com/spf13/pflag"
 )
 
 var arxivURLRe = regexp.MustCompile(`^https://arxiv\.org/abs/(\d{4}\.\d{5})(v\d+)?$`)
-const ARXIV_HTML_BASE = "https://arxiv.org/html/"
+const ARXIV_HTML_BASE_URL = "https://arxiv.org/html/"
+const NUM_ATTEMPTS = 5
 
 type ArxivPaper struct {
 	Id string
@@ -23,6 +27,9 @@ type ArxivPaper struct {
 }
 
 func main() {
+	defer os.RemoveAll("tmp")
+
+	/// Extract CLI arguments
 	output := flag.StringP("output", "o", "", "output directory")
 
 	flag.Parse()
@@ -44,13 +51,13 @@ func main() {
 	}
 
 	/// Iterate through each line in .txt to generate .epubs
-	txt_file, err := os.Open(input)
+	txtFile, err := os.Open(input)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer txt_file.Close()
+	defer txtFile.Close()
 
-	scanner := bufio.NewScanner(txt_file)
+	scanner := bufio.NewScanner(txtFile)
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -62,7 +69,11 @@ func main() {
 			continue
 		}
 
-		fmt.Printf("%s\n", paper.Id)
+		err = generateEpub(paper)
+		if err != nil {
+			log.Printf("[!] Couldn't generate .epub for %s. Error: %s\n", line, err)
+			continue
+		}
 	}
 	
 	if err := scanner.Err(); err != nil {
@@ -123,7 +134,7 @@ func validateArxivUrl(url string) (ArxivPaper, error) {
 	id := matches[1]
 
 	// Grab raw HTML if possible
-	res, err := http.Get(ARXIV_HTML_BASE + id)
+	res, err := http.Get(ARXIV_HTML_BASE_URL + id)
 	if err != nil {
 		return ArxivPaper{}, err
 	}
@@ -143,4 +154,84 @@ func validateArxivUrl(url string) (ArxivPaper, error) {
     }
 
 	return paper, nil
+}
+
+func generateEpub(paper ArxivPaper) error {
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(paper.Html))
+	if err != nil {
+		return errors.New("couldn't open HTML document")
+	}
+
+	// Download images found in paper
+	log.Printf("[-] Downloading images for %s", paper.Id)
+	imgsDir := filepath.Join("tmp", paper.Id)
+	err = os.MkdirAll(imgsDir, 0755)
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(imgsDir)
+	
+	article := doc.Find("article")
+	article.Find("img").Each(func(i int, s *goquery.Selection) {
+		src, exists := s.Attr("src")
+		if !exists {
+			return
+		}
+		
+		err := downloadImage(src, paper.Id, imgsDir)
+		if err != nil {
+			log.Printf("Couldn't download %s for %s. Error: %s\n", src, paper.Id, err)
+		}
+	})
+	
+	return nil
+}
+
+func downloadImage(src string, id string, dir string) error {
+	parts := strings.Split(src, "/")
+	filename := parts[len(parts)-1]
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+	
+	candidates := []string {
+		ARXIV_HTML_BASE_URL + src,
+		ARXIV_HTML_BASE_URL + id + src,
+		ARXIV_HTML_BASE_URL + id + filename,
+	}
+
+	for _, url := range candidates {
+		for range [NUM_ATTEMPTS]int{} {
+			resp, err := client.Get(url)
+			if err != nil {
+				continue
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode == http.StatusOK {
+				path := filepath.Join(dir, filename)
+				file, err := os.Create(path)
+				if err != nil {
+					return err
+				}
+				defer file.Close()
+
+				_, err = io.Copy(file, resp.Body)
+				if err != nil {
+					return err
+				}
+
+				return nil
+			}
+
+			if resp.StatusCode == http.StatusTooManyRequests {
+		        time.Sleep(time.Second * 3)
+				continue
+			}
+
+			break
+		}
+	}
+	
+	return errors.New("can't find image source")
 }

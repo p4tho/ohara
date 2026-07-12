@@ -10,16 +10,31 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/go-shiori/go-epub"
 	"github.com/PuerkitoBio/goquery"
 	flag "github.com/spf13/pflag"
 )
 
-var arxivURLRe = regexp.MustCompile(`^https://arxiv\.org/abs/(\d{4}\.\d{5})(v\d+)?$`)
-const ARXIV_HTML_BASE_URL = "https://arxiv.org/html/"
-const NUM_ATTEMPTS = 5
+var (
+	invalidChars = regexp.MustCompile(`[<>:"/\\|?*\x00-\x1F]`)
+	reservedNames = map[string]struct{}{
+		"CON": {}, "PRN": {}, "AUX": {}, "NUL": {},
+		"COM1": {}, "COM2": {}, "COM3": {}, "COM4": {},
+		"COM5": {}, "COM6": {}, "COM7": {}, "COM8": {}, "COM9": {},
+		"LPT1": {}, "LPT2": {}, "LPT3": {}, "LPT4": {},
+		"LPT5": {}, "LPT6": {}, "LPT7": {}, "LPT8": {}, "LPT9": {},
+	}
+	arxivURLRe = regexp.MustCompile(`^https://arxiv\.org/abs/(\d{4}\.\d{5})(v\d+)?$`)
+)
+
+const (
+	ARXIV_HTML_BASE_URL = "https://arxiv.org/html/"
+	NUM_ATTEMPTS = 5
+)
 
 type ArxivPaper struct {
 	Id string
@@ -69,7 +84,7 @@ func main() {
 			continue
 		}
 
-		err = generateEpub(paper)
+		err = generateEpub(paper, *output)
 		if err != nil {
 			log.Printf("[!] Couldn't generate .epub for %s. Error: %s\n", line, err)
 			continue
@@ -156,10 +171,16 @@ func validateArxivUrl(url string) (ArxivPaper, error) {
 	return paper, nil
 }
 
-func generateEpub(paper ArxivPaper) error {
+func generateEpub(paper ArxivPaper, outDir string) error {
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(paper.Html))
 	if err != nil {
 		return errors.New("couldn't open HTML document")
+	}
+
+	// Create .epub
+	book, err := epub.NewEpub("My First Book")
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	// Download images found in paper
@@ -182,7 +203,81 @@ func generateEpub(paper ArxivPaper) error {
 		if err != nil {
 			log.Printf("Couldn't download %s for %s. Error: %s\n", src, paper.Id, err)
 		}
+
+		// Make image avilable to .epub builder
+		parts := strings.Split(src, "/")
+		filename := parts[len(parts)-1]
+		imgPath := filepath.Join(imgsDir, filename)
+		imgRef, err := book.AddImage(imgPath, "")
+		if err != nil {
+		    return
+		}
+		s.SetAttr("src", imgRef)
 	})
+
+	titleHtml, err := article.Find("h1.ltx_title").First().Html()
+	if err != nil {
+	    return err
+	}
+	_, err = book.AddSection(
+		titleHtml,
+		"Title",
+		"",
+		"",
+	)
+
+	// Add abstract sections
+	abstractCount := 0
+	article.Find("div.ltx_abstract").Each(func(i int, s *goquery.Selection) {
+		html, err := s.Html()
+		if err != nil {
+			return
+		}
+		
+		_, err = book.AddSection(
+			html,
+			"abstract" + strconv.Itoa(abstractCount),
+			"",
+			"",
+		)
+		if err != nil {
+			return
+		}
+
+		abstractCount++
+	})
+
+	// Add paper's sections
+	sectionCount := 0
+	article.Find("section.ltx_section").Each(func(i int, s *goquery.Selection) {
+		html, err := s.Html()
+		if err != nil {
+			return
+		}
+		
+		_, err = book.AddSection(
+			html,
+			"section" + strconv.Itoa(sectionCount),
+			"",
+			"",
+		)
+		if err != nil {
+			return
+		}
+
+		sectionCount++
+	})
+
+	title := article.Find("h1.ltx_title").First().Text()
+	cleanFilename := cleanFilename(title) + ".epub"
+	epubPath := filepath.Join(outDir, cleanFilename)
+	
+	err = book.Write(epubPath)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("[~] Generated %s\n", epubPath)
 	
 	return nil
 }
@@ -234,4 +329,31 @@ func downloadImage(src string, id string, dir string) error {
 	}
 	
 	return errors.New("can't find image source")
+}
+
+func cleanFilename(name string) string {
+	// Remove invalid characters.
+	name = invalidChars.ReplaceAllString(name, "_")
+
+	// Trim spaces and dots from both ends.
+	name = strings.Trim(name, " .")
+
+	// Replace whitespace with single underscores.
+	name = strings.Join(strings.Fields(name), "_")
+
+	if name == "" {
+		return "untitled"
+	}
+
+	// Handle reserved Windows device names.
+	base := name
+	if dot := strings.IndexByte(name, '.'); dot != -1 {
+		base = name[:dot]
+	}
+
+	if _, reserved := reservedNames[strings.ToUpper(base)]; reserved {
+		name = "_" + name
+	}
+
+	return name
 }

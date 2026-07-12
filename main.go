@@ -291,8 +291,8 @@ func downloadImage(src string, id string, dir string) error {
 	
 	candidates := []string {
 		ARXIV_HTML_BASE_URL + src,
-		ARXIV_HTML_BASE_URL + id + src,
-		ARXIV_HTML_BASE_URL + id + filename,
+		ARXIV_HTML_BASE_URL + id + "/" + src,
+		ARXIV_HTML_BASE_URL + id + "/" + filename,
 	}
 
 	for _, url := range candidates {

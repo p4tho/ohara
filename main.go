@@ -269,6 +269,7 @@ func generateEpub(paper ArxivPaper, outDir string) error {
 	})
 
 	title := article.Find("h1.ltx_title").First().Text()
+	book.SetTitle(title)
 	cleanFilename := cleanFilename(title) + ".epub"
 	epubPath := filepath.Join(outDir, cleanFilename)
 	
